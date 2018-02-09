@@ -13,7 +13,7 @@ ARG SRC_PATH
 
 # Set the environment variables (defaults where required)
 # paxctl fix for alpine linux: https://github.com/wekan/wekan/issues/1303
-ENV BUILD_DEPS="gnupg wget curl bzip2 alpine-sdk python git ca-certificates musl@testing paxctl musl-dev musl"
+ENV BUILD_DEPS="gnupg wget curl bzip2 alpine-sdk python git ca-certificates musl@testing paxctl musl-dev musl nodejs"
 ENV NODE_VERSION ${NODE_VERSION:-v8.9.3}
 ENV METEOR_RELEASE ${METEOR_RELEASE:-1.6.0.1}
 ENV USE_EDGE ${USE_EDGE:-false}
@@ -35,15 +35,17 @@ RUN \
     # Add non-root user wekan
     addgroup -S wekan && \
     adduser -S -h /home/wekan -G wekan wekan && \
+    chown -R wekan.wekan /home/wekan && \
     \
     # OS dependencies
     apk add --no-cache ${BUILD_DEPS} && \
     \
     # Install gosu
     set -x && \
-	  apk add --update $buildDeps && \
 	  gpg-agent --daemon && \
-	  gpg --keyserver pgp.mit.edu --recv-keys $GOSU_DOWNLOAD_KEY && \
+    gpg --keyserver ha.pool.sks-keyservers.net --recv-keys "$GOSU_DOWNLOAD_KEY" || \
+    gpg --keyserver pgp.mit.edu --recv-keys "$GOSU_DOWNLOAD_KEY" || \
+    gpg --keyserver keyserver.pgp.com --recv-keys "$GOSU_DOWNLOAD_KEY" && \
 	  echo "trusted-key $GOSU_DOWNLOAD_KEY" >> /root/.gnupg/gpg.conf && \
 	  curl -sSL "$GOSU_DOWNLOAD_URL" > gosu-amd64 && \
 	  curl -sSL "$GOSU_DOWNLOAD_SIG" > gosu-amd64.asc && \
@@ -51,55 +53,13 @@ RUN \
 	  rm -f gosu-amd64.asc && \
 	  mv gosu-amd64 /usr/bin/gosu && \
 	  chmod +x /usr/bin/gosu && \
-	  apk del --purge $buildDeps && \
-	  rm -rf /root/.gnupg && \
-	  rm -rf /var/cache/apk/* && \
-    \
-    # Download nodejs
-    wget https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-${ARCHITECTURE}.tar.gz && \
-    wget https://nodejs.org/dist/${NODE_VERSION}/SHASUMS256.txt.asc && \
-    \
-    # Verify nodejs authenticity
-    grep ${NODE_VERSION}-${ARCHITECTURE}.tar.gz SHASUMS256.txt.asc | shasum -a 256 -c - && \
-    export GNUPGHOME="$(mktemp -d)" && \
-    \
-    # Try other key servers if ha.pool.sks-keyservers.net is unreachable
-    # Code from https://github.com/chorrell/docker-node/commit/2b673e17547c34f17f24553db02beefbac98d23c
-    # gpg keys listed at https://github.com/nodejs/node#release-team
-    # and keys listed here from previous version of this Dockerfile
-    for key in \
-    9554F04D7259F04124DE6B476D5A82AC7E37093B \
-    94AE36675C464D64BAFA68DD7434390BDBE9B9C5 \
-    FD3A5288F042B6850C66B31F09FE44734EB7990E \
-    71DCFD284A79C3B38668286BC97EC7A07EDE3FC1 \
-    DD8F2338BAE7501E3DD5AC78C273792F7D83545D \
-    C4F0DFFF4E8C1A8236409D08E73BC641CC11F4C8 \
-    B9AE9905FFD7803F25714661B63B535A4C206CA9 \
-    ; do \
-    gpg --keyserver ha.pool.sks-keyservers.net --recv-keys "$key" || \
-    gpg --keyserver pgp.mit.edu --recv-keys "$key" || \
-    gpg --keyserver keyserver.pgp.com --recv-keys "$key" ; \
-    done && \
-    gpg --verify SHASUMS256.txt.asc && \
-    # Ignore socket files then delete files then delete directories
-    find "$GNUPGHOME" -type f | xargs rm -f && \
-    find "$GNUPGHOME" -type d | xargs rm -fR && \
-    rm -f SHASUMS256.txt.asc && \
-    \
-    # Install Node
-    tar xvzf node-${NODE_VERSION}-${ARCHITECTURE}.tar.gz && \
-    rm node-${NODE_VERSION}-${ARCHITECTURE}.tar.gz && \
-    mv node-${NODE_VERSION}-${ARCHITECTURE} /opt/nodejs && \
-    ln -s /opt/nodejs/bin/node /usr/bin/node && \
-    ln -s /opt/nodejs/bin/npm /usr/bin/npm && \
-    \
-    # paxctl fix for alpine linux: https://github.com/wekan/wekan/issues/1303
-    paxctl -mC `which node` && \
     \
     # Install Node dependencies
-    npm install -g npm@${NPM_VERSION} && \
-    npm install -g node-gyp && \
-    npm install -g fibers@${FIBERS_VERSION} && \
+    mkdir -p /usr/lib/node_modules/fibers && \
+    chmod a+rw /usr/lib/node_modules/fibers && \
+    gosu root npm install -g npm@${NPM_VERSION} && \
+    gosu root npm install -g node-gyp && \
+    gosu root npm install -g fibers@${FIBERS_VERSION} && \
     \
     # Change user to wekan and install meteor
     cd /home/wekan/ && \
@@ -111,6 +71,7 @@ RUN \
     \
     # Check if opting for a release candidate instead of major release
     if [ "$USE_EDGE" = false ]; then \
+      echo "install meteor" && \
       gosu wekan:wekan sh /home/wekan/install_meteor.sh; \
     else \
       gosu wekan:wekan git clone --recursive --depth 1 -b release/METEOR@${METEOR_EDGE} git://github.com/meteor/meteor.git /home/wekan/.meteor; \
